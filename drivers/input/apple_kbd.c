@@ -57,9 +57,6 @@ static const u8 hid_kbd_keymap[] = {
 	KEY_BACKSLASH, KEY_COMPOSE, KEY_POWER, KEY_KPEQUAL,
 };
 
-/* Report ID used for keyboard input reports. */
-#define KBD_REPORTID	0x01
-
 static void apple_kbd_service_modifiers(struct input_config *input,
 					struct apple_kbd_priv *priv)
 {

@@ -27,6 +27,7 @@ struct apple_mtp_kbd_priv {
 	u32 init_size;
 	u32 fifo_size;
 	int kbd_iface;		/* keyboard interface, -1 until announced */
+	int backlog;		/* bytes queued at the first poll, -1 before it */
 };
 
 #define DATA_TX8		0x4
@@ -122,8 +123,9 @@ static int dchid_input_len(struct dchid_hdr *hdr, u8 *body)
 }
 
 /*
- * The comm interface announces each interface with an EVENT_INIT report
- * that names it. Remember which one is the keyboard.
+ * The comm interface announces each interface with EVENT_INIT reports
+ * that name it. Remember which one is the keyboard once its last init
+ * packet is in, as Linux does.
  */
 static void apple_mtp_kbd_comm(struct apple_mtp_kbd_priv *priv,
 			       struct dchid_hdr *hdr, u8 *body)
@@ -135,8 +137,29 @@ static void apple_mtp_kbd_comm(struct apple_mtp_kbd_priv *priv,
 	    init->type != EVENT_INIT)
 		return;
 
-	if (!strncmp(init->name, "keyboard", sizeof(init->name)))
+	if (!strncmp(init->name, "keyboard", sizeof(init->name)) &&
+	    !init->more_packets)
 		priv->kbd_iface = init->iface;
+}
+
+/*
+ * A keyboard report that was queued before the first poll gives the key
+ * state at start, not a key press at a prompt. Take it as the initial
+ * state: keys that are down in it make no key event, and their release
+ * makes none either. So a stuck key never gets to stdin.
+ */
+static void apple_mtp_kbd_held(struct apple_mtp_kbd_priv *priv, u8 *data)
+{
+	struct apple_kbd_report *r = (void *)data;
+
+	if (r->reportid != KBD_REPORTID)
+		return;
+
+	priv->kbd.old = *r;
+	if (r->modifiers || memchr_inv(r->keycode, 0, sizeof(r->keycode)))
+		printf("mtp: keys down at start, ignored: %02x %02x %02x %02x %02x %02x %02x\n",
+		       r->modifiers, r->keycode[0], r->keycode[1], r->keycode[2],
+		       r->keycode[3], r->keycode[4], r->keycode[5]);
 }
 
 static int apple_mtp_kbd_check(struct input_config *input)
@@ -144,6 +167,7 @@ static int apple_mtp_kbd_check(struct input_config *input)
 	struct udevice *dev = input->dev;
 	struct apple_mtp_kbd_priv *priv = dev_get_priv(dev);
 	struct dchid_hdr hdr;
+	bool startup;
 	int ret;
 
 	/* Poll for syslogs if RTKit is up */
@@ -151,6 +175,8 @@ static int apple_mtp_kbd_check(struct input_config *input)
 		apple_rtkit_helper_poll(priv->helper, 0);
 
 	u32 pending = readl(priv->local + DATA_RX_COUNT);
+	if (priv->backlog < 0)
+		priv->backlog = pending;
 	if (pending < 8)
 		return 0;
 
@@ -164,8 +190,13 @@ static int apple_mtp_kbd_check(struct input_config *input)
 		/* Not at a packet start: drop what is queued, then resync */
 		dev_err(dev, "bad header length %d\n", hdr.hdr_len);
 		dockchannel_read(dev, NULL, pending - sizeof(hdr));
+		priv->backlog = 0;
 		return 0;
 	}
+
+	/* Packets that were queued at the first poll were sent at start */
+	startup = priv->backlog > 0;
+	priv->backlog -= min_t(int, priv->backlog, sizeof(hdr) + hdr.length + 4);
 
 	/* Save comm init messages for the next stage */
 	if (hdr.iface == 0) {
@@ -203,6 +234,11 @@ static int apple_mtp_kbd_check(struct input_config *input)
 		len = dchid_input_len(&hdr, buf);
 		if (len < (int)sizeof(struct apple_kbd_report))
 			return 0;
+
+		if (startup) {
+			apple_mtp_kbd_held(priv, buf + sizeof(struct dchid_subhdr));
+			return 0;
+		}
 
 		return apple_kbd_handle_report(input, &priv->kbd,
 					       buf + sizeof(struct dchid_subhdr),
@@ -284,6 +320,7 @@ static int apple_mtp_kbd_probe(struct udevice *dev)
 		return -ENOMEM;
 
 	priv->kbd_iface = -1;
+	priv->backlog = -1;
 
 	input->dev = dev;
 	input->read_keys = apple_mtp_kbd_check;

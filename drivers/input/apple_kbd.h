@@ -10,6 +10,9 @@
 
 #include <input.h>
 
+/* Report ID used for keyboard input reports. */
+#define KBD_REPORTID	0x01
+
 struct apple_kbd_report {
 	u8 reportid;
 	u8 modifiers;
