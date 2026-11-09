@@ -298,6 +298,7 @@
 - [@xypron](https://github.com/xypron)
 - [@yangbolu1991](https://github.com/yangbolu1991)
 - [@yegorich](https://github.com/yegorich)
+- [@yeli-nxp](https://github.com/yeli-nxp)
 - [@ymoog](https://github.com/ymoog)
 - [@yuri-tikhonov](https://github.com/yuri-tikhonov)
 - [@Zhiqiang-Hou](https://github.com/Zhiqiang-Hou)
